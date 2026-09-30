@@ -1,0 +1,9 @@
+# dsh-llm-gateway bundle layer: 插入本机 OpenAI 兼容网关。
+- insert:
+    - id: llm-gateway
+      name: 'dsh-llm-gateway'
+      config:
+        host: 127.0.0.1
+        port: 8790
+        apiKeys: []
+        requestLog: true
