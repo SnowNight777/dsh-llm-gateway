@@ -8,8 +8,14 @@ Python、Node、curl、Notebook 都能直接用，不需要额外的 SDK 适配�
 
 - **OpenAI 兼容**：`/v1/models`、`/v1/chat/completions`（流式与非流式）、`/healthz`
 - **真实路由**：模型目录从 DSH 的 `llm` 服务自动发现；请求里的 `model` 决定实际调哪个 provider，不是被忽略后照常回答
+- **工具调用**：`tools` 完整转发，`tool_calls` 按 OpenAI 约定分片返回；`role:'tool'` 回执与 `assistant.tool_calls` 历史都能正确落回 DSH 的消息形状
+- **图片输入**：`image_url` 支持 data URL 与 http(s) 链接，图片经 DSH 的 attachments 服务落盘后交给模型；`/v1/models` 里 `input_modalities` 含 `image` 的模型可直接用
+- **thinking 双向**：非流式响应带 `reasoning_content`，请求也可回传它——DeepSeek 系 thinking 模型的多轮工具对话靠这个才续得上
+- **usage 带明细**：除三个基本数字外，还给出 `prompt_tokens_details.cached_tokens` 与 `completion_tokens_details.reasoning_tokens`
+- **没有去路的参数会报错**：DSH 的调用配置只承载 `temperature` / `max_tokens` / `stop` / `reasoning_effort`，其余（`top_p`、`seed`、`response_format` 等）一律 `400` 说清，不静默忽略
 - **未知模型会报错**：打错一个字母得到的是 `404 model_not_found`，不会静默换成另一个模型的答案
 - **歧义会报错**：某个裸 model id 同时属于多个 provider 时返回 `400 ambiguous_model`，提示改用 `provider/model`
+- **错误码有据可依**：按 DSH 的稳定 code 映射状态（401 / 429 / 400 / 404），`Retry-After` 一并透传
 - **可选鉴权**：配置 `apiKeys` 后校验 `Authorization: Bearer` 或 `x-api-key`（sha256 + 定长比较）
 - **可在界面配置**：宿主侧声明了 Config schema，浏览器半侧把配置表单注册进 Plugins 页，端口与默认模型都能在界面上改，**改端口不需要重启 DSH**
 - **零运行时依赖**：只用 Node 内置模块，不需要 `npm install`
@@ -24,18 +30,34 @@ Python、Node、curl、Notebook 都能直接用，不需要额外的 SDK 适配�
 2. 在 profile 的 `package.json` 里，把 `"dsh-llm-gateway"` 追加进 `dsh.profile.bundles`
 3. 重启 DSH（bundle 清单变更必须重启；`patchReload: live` 只管已加载插件的 config）
 
-也可以把它作为本地依赖挂进去，这样改源码即生效：
+也可以让 pnpm 把它装上。两种挂法各有取舍：
+
+**符号链接**（`link:`）——源码就是插件本体，改完源码重装一次即可：
 
 ```jsonc
 // profile 的 package.json
 {
   "dependencies": {
-    "dsh-llm-gateway": "link:.dsh-llm-gateway-source"
+    "dsh-llm-gateway": "link:/abs/path/to/dsh-llm-gateway"
   }
 }
 ```
 
-改完跑一次 `pnpm install` 建立符号链接。
+**复制安装**（`file:`）——内容被复制进 profile，源码留在原处：
+
+```jsonc
+{
+  "dependencies": {
+    "dsh-llm-gateway": "file:/abs/path/to/dsh-llm-gateway"
+  }
+}
+```
+
+两种都要跑一次 `pnpm install`。
+
+> **改动插件代码后必须重启 DSH。** 重装只换磁盘上的文件，跑着的进程不会把已载入的模块换掉 ——
+> 判断要不要重启，看进程启动时间是不是早于文件落盘时间。另外 Windows 上重装前最好先卸载，
+> 否则 pnpm 会撞上 `EPERM`（旧目录还被进程占着，改不了名）。
 
 > 别在 profile 的 `cordis.patch.yml` 里再写一条 `id: llm-gateway` 的 `insert` —— 会和包内 patch 撞 id。
 > 要改默认值就写一条 id 定向的 override，只列要改的字段。
@@ -47,6 +69,7 @@ Python、Node、curl、Notebook 都能直接用，不需要额外的 SDK 适配�
 2. `curl http://127.0.0.1:8790/healthz` → `catalog.models` 应等于你在 profile 里配的模型总数
 3. 非流式与流式各调一次，`finish_reason` 应是**字符串**
 4. 发一个不存在的 model → 应返回 **404**（不是 200）
+5. 带 `tools` 发一次 → 应返回 `finish_reason: "tool_calls"`，且 `message.tool_calls` 非空
 
 ### 调用
 
@@ -78,8 +101,24 @@ curl http://127.0.0.1:8790/v1/chat/completions \
 
 `/models`、`/chat/completions`、`/v1/healthz` 是等价别名。
 
-请求体支持：`model`、`messages`（`content` 为字符串或 `[{type:'text',text}]`）、`stream`、
-`max_tokens`（1–200000）、`temperature`、`stop`（最多 4 条）。
+请求体支持的参数：`model`、`messages`、`stream`、`max_tokens`（或新名 `max_completion_tokens`，1–200000）、
+`temperature`、`stop`（最多 4 条）、`tools`、`reasoning_effort`。
+
+**不在这份名单里的一律 `400 unsupported_parameter`。** 例外只有 `n=1`、`stream_options`、`user` 和
+`tool_choice:"auto"` —— 这几个等于不表态，却几乎每个 SDK 都会默认带上，拒绝等于自断门路。
+
+`messages[].content` 可以是字符串，也可以是 part 数组：
+
+| part                                  | 说明                                                             |
+| ------------------------------------- | -------------------------------------------------------------- |
+| `{type:'text', text}`                 | 文本                                                             |
+| `{type:'image_url', image_url:{url}}` | 图片；`url` 支持 `data:image/png;base64,…` 与 `http(s)://`（后者由网关代下载） |
+
+消息角色除 `user` / `assistant` / `system` / `developer` 外，还支持工具对话的两个形状：
+
+- `{role:'tool', tool_call_id, content}` —— 工具回执
+- `{role:'assistant', tool_calls:[…], reasoning_content}` —— 带工具调用或思考过程的历史
+
 `system` / `developer` 消息会合并成 DSH 的 `options.system`。
 
 `model` 解析顺序：规范 id `provider/model` → 唯一的裸 model id → 请求缺 `model` 时用 `defaultModel`。
@@ -102,12 +141,20 @@ curl http://127.0.0.1:8790/v1/chat/completions \
 ## 已知边界
 
 - **默认无鉴权**：只绑回环所以安全；一旦把 `host` 改到局域网或公网，**必须**同时配 `apiKeys`。
-- **纯文本**：带 `image_url` / 音频 part 的请求返回 `400 unsupported_content`。
-- **不转发 tool calling**：请求里的 `tools` / `tool_calls` 不处理；上游返回 `tool-calls` 结束原因时，
-  `finish_reason` 映射为 `tool_calls`，但工具调用内容不会出现在响应里。
+- **图片要靠 attachments 服务**：DSH 没挂载 attachment provider 时返回 `501`。图片的类型、张数、
+  总字节由那个 provider 的策略决定，它拒绝时网关把原话（如 `INVALID_IMAGE`）直接透传，不替它改口。
+- **音频、视频不支持**：`input_audio` 之类的 part 返回 `400 unsupported_content`。
+- **采样参数没有去路**：DSH 的调用配置只有六个字段，`top_p` / `seed` / `response_format` / `logprobs` /
+  penalties 等都返回 `400` —— 宁可报错，也不静默忽略。
+- **thinking 模型要多传一个字段**：多轮请求必须把上一轮的 `reasoning_content` 带回，否则上游会以 `400`
+  拒绝。这是模型的要求，不是网关的。
+- **`reasoning_tokens` 未必有**：字段实现了，但取不取得到取决于上游是否上报；成文时测到的 provider
+  都没给这个数。
 - **单轮**：每次请求独立调用 `llm.stream`，不维护服务端会话；多轮靠客户端把历史塞回 `messages`。
-- **目录是快照**：`catalogTtlMs` 到期或 id 未命中时重建；新增模型仍建议重启 DSH。
-- **中途失败改不回状态码**：SSE 头一旦发出就只能下发错误数据帧（OpenAI 同样做法）；开流前的失败会给真正的 502。
+- **目录是快照**：`catalogTtlMs` 到期或 id 未命中时重建，新增模型建议重启 DSH。空目录不算有效快照，
+  适配器就绪后会自愈。
+- **中途失败改不回状态码**：SSE 头一旦发出就只能下发错误数据帧（OpenAI 同样做法）；开流前的失败会给
+  真实的错误状态。
 - 插件加载失败不会拖垮 DSH：单个插件异常只影响本插件。
 
 ## 文件清单
