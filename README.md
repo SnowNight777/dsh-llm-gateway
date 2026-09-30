@@ -1,8 +1,8 @@
 # dsh-llm-gateway
 
-把 DSH 当前 profile 已配置的全部 provider / model，以 **OpenAI 兼容接口**暴露到本机回环，供任意本地程序调用。
+把 DSH 已配置的模型共享给本机程序——无需重复配置，用 **OpenAI 兼容接口**直接调用。
 
-Python、Node、curl、Notebook —— 任何会说 OpenAI 协议的东西都能直接用，不需要额外 SDK 适配层。
+Python、Node、curl、Notebook 都能直接用，不需要额外的 SDK 适配层；模型目录从你的 DSH 配置里自动发现。
 
 ## 特性
 
