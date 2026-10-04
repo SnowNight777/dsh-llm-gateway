@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "main": "./lib/index.js",
-  "description": "把 DSH 已配置的全部 provider/model 以 OpenAI 兼容接口暴露到本机回环，供任意本地程序调用",
+  "description": "把 DSH 已配置的模型共享给本机程序——无需重复配置，用 OpenAI 兼容接口直接调用",
   "license": "MIT",
   "files": [
     "lib",

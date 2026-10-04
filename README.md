@@ -29,7 +29,7 @@ Python、Node、curl、Notebook 都能直接用，不需要额外的 SDK 适配�
 只把目录丢进 `<profile>/node_modules/`、不写 `dependencies` 的「游离安装」不受支持，后果是：
 
 - DSH 插件页看不到它 —— 那里的 `installed` 由 profile 的 `dependencies` 决定，启停、版本、卸载都无从操作；
-- 「设置 → 插件」里不会出现它的配置表单，端口 / 默认模型这些参数只能改配置文件；
+- 插件页那张包卡片的**详情页**里不会出现「配置」块，端口 / 默认模型这些参数只能改配置文件；
 - `/healthz` 会返回 `installation.declared: false`，宿主日志同时打一条「游离安装」警告。
 
 **建议安装方式：打包安装**（tarball）—— profile 与源码目录解耦，内容被复制进 profile，
@@ -55,12 +55,13 @@ Node 的依赖解析基准留在 profile 的 `node_modules` 内，不依赖符�
    Windows 上重装前最好先卸载，否则 pnpm 会撞 `EPERM`（旧目录还被进程占着，改不了名）。
 
 > 别在 profile 的 `cordis.patch.yml` 里再写一条 `id: llm-gateway` 的 `insert` —— 会和包内 patch 撞 id。
-> 要改默认值就写一条 id 定向的 override，只列要改的字段。
+> 参数一律在**设置页**改：写在组合层（patch 里的 config override）的值会让设置页里那个字段显示成
+> 「已覆盖」，反而挡住正常改法。
 
 ### 验证
 
-1. DSH 日志出现 `[llm-gateway] gateway listening on http://127.0.0.1:8790/v1`
-   和 `[llm-gateway] catalog ready: N providers, M models (K aliases)`
+1. `curl http://127.0.0.1:8790/healthz` 能通就说明起来了（宿主日志落不落盘取决于部署，
+   别把日志当验收依据）：`ok: true`
 2. `curl http://127.0.0.1:8790/healthz` → `catalog.models` 应等于你在 profile 里配的模型总数
 3. 非流式与流式各调一次，`finish_reason` 应是**字符串**
 4. 发一个不存在的 model → 应返回 **404**（不是 200）
