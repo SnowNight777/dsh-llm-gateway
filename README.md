@@ -12,13 +12,13 @@ Python、Node、curl、Notebook 都能直接用，不需要额外的 SDK 适配�
 - **图片输入**：`image_url` 支持 data URL 与 http(s) 链接，图片经 DSH 的 attachments 服务落盘后交给模型；`/v1/models` 里 `input_modalities` 含 `image` 的模型可直接用
 - **thinking 双向**：非流式响应带 `reasoning_content`，请求也可回传它——DeepSeek 系 thinking 模型的多轮工具对话靠这个才续得上
 - **usage 带明细**：除三个基本数字外，还给出 `prompt_tokens_details.cached_tokens` 与 `completion_tokens_details.reasoning_tokens`
-- **没有去路的参数会报错**：DSH 的调用配置只承载 `temperature` / `max_tokens` / `stop` / `reasoning_effort`，其余（`top_p`、`seed`、`response_format` 等）一律 `400` 说清，不静默忽略
+- **没有去路的参数会报错**：DSH 的调用配置只承载 `temperature` / `max_tokens` / `reasoning_effort`，其余（`top_p`、`seed`、`response_format` 等）一律 `400` 说清，不静默忽略；`stop` 会被透传，但**当前 DSH 的适配器不吃它**（见「已知边界」）
 - **未知模型会报错**：打错一个字母得到的是 `404 model_not_found`，不会静默换成另一个模型的答案
 - **歧义会报错**：某个裸 model id 同时属于多个 provider 时返回 `400 ambiguous_model`，提示改用 `provider/model`
 - **错误码有据可依**：按 DSH 的稳定 code 映射状态（401 / 429 / 400 / 404），`Retry-After` 一并透传
 - **可选鉴权**：配置 `apiKeys` 后校验 `Authorization: Bearer` 或 `x-api-key`（sha256 + 定长比较）
-- **可在界面配置**：宿主侧声明了 Config schema，浏览器半侧把配置表单注册进 Plugins 页，端口与默认模型都能在界面上改，**改端口不需要重启 DSH**
-- **零运行时依赖**：只用 Node 内置模块，不需要 `npm install`
+- **可在界面配置**：宿主侧声明了 Config schema（**每个字段都必须带 `.volatile()`** —— `dsh-settings` 的 `volatileForm()` 会把「一个 volatile 字段都没有」的条目整条丢掉，配置区也就不会出现），浏览器半侧把配置表单注册进 Plugins 页，端口与默认模型都能在界面上改，**改端口不需要重启 DSH**
+- **零运行时依赖**：只用 Node 内置模块（另加 DSH 自身提供的 peer `@deepseek-ai/schemastery`），不需要 `npm install`
 
 ## 快速开始
 
@@ -91,13 +91,19 @@ curl http://127.0.0.1:8790/v1/chat/completions \
 | 方法   | 路径                     | 说明                                                           |
 | ---- | ---------------------- | ------------------------------------------------------------ |
 | GET  | `/v1/models`           | 全部 `provider/model`；某个裸 model id 只属于一个 provider 时，同时以裸 id 列出 |
-| GET  | `/healthz`             | 网关状态 + 目录统计（provider 数 / 模型数 / 别名数 / 目录年龄）                   |
+| GET  | `/healthz`             | 网关状态 + 目录统计（provider 数 / 模型数 / 别名数 / 目录年龄）+ `installation`（profile 声明的 spec、是否登记在 dependencies 与 `dsh.profile.bundles` 里） |
 | POST | `/v1/chat/completions` | OpenAI 兼容，`stream` 真/假都支持                                    |
 
 `/models`、`/chat/completions`、`/v1/healthz` 是等价别名。
 
-请求体支持的参数：`model`、`messages`、`stream`、`max_tokens`（或新名 `max_completion_tokens`，1–200000）、
-`temperature`、`stop`（最多 4 条）、`tools`、`reasoning_effort`。
+请求体支持的参数：`model`、`messages`、`stream`、`max_tokens`（或新名 `max_completion_tokens`；
+**超出 200000 会被截断到 200000，不是报错**）、`temperature`、`stop`（最多 4 条，见下面的警告）、
+`tools`、`reasoning_effort`。
+
+> ⚠️ **`stop` 在当前 DSH 上不可用**：网关会把它原样透传，但 DSH 的适配器不支持
+> `GenerateOptions.stop`，带 `stop` 的请求会以 `502 UNSUPPORTED_OPTION` 失败
+> （上游原话：`llm-pi-ai does not support GenerateOptions.stop`；opencode-go 与 niko-api 实测一致，
+> 不带 `stop` 的同请求返回 200）。需要截断请用提示词自行约束。
 
 **不在这份名单里的一律 `400 unsupported_parameter`。** 例外只有 `n=1`、`stream_options`、`user` 和
 `tool_choice:"auto"` —— 这几个等于不表态，却几乎每个 SDK 都会默认带上，拒绝等于自断门路。
@@ -141,6 +147,9 @@ curl http://127.0.0.1:8790/v1/chat/completions \
 - **音频、视频不支持**：`input_audio` 之类的 part 返回 `400 unsupported_content`。
 - **采样参数没有去路**：DSH 的调用配置只有六个字段，`top_p` / `seed` / `response_format` / `logprobs` /
   penalties 等都返回 `400` —— 宁可报错，也不静默忽略。
+- **`stop` 当前不可用**：它会被原样透传给 DSH，但适配器不支持 `GenerateOptions.stop`，带 `stop` 的请求
+  以 `502 UNSUPPORTED_OPTION` 失败 —— 这一层上游不支持，不是网关的取舍；同请求去掉 `stop` 即 200。
+- **`max_tokens` 是软上限**：超过 200000 不报错，而是被截断到 200000（DSH 的调用配置就收这个数）。
 - **thinking 模型要多传一个字段**：多轮请求必须把上一轮的 `reasoning_content` 带回，否则上游会以 `400`
   拒绝。这是模型的要求，不是网关的。
 - **`reasoning_tokens` 未必有**：字段实现了，但取不取得到取决于上游是否上报；成文时测到的 provider
@@ -156,11 +165,13 @@ curl http://127.0.0.1:8790/v1/chat/completions \
 
 ```
 dsh-llm-gateway/
-  package.json       # 包描述，dsh.bundle.patch 与 dsh.client 声明
-  cordis.patch.yml   # bundle 层：插入 llm-gateway 条目
+  package.json         # 包描述，dsh.bundle.patch 与 dsh.client 声明
+  cordis.patch.yml     # bundle 层：插入 llm-gateway 条目
+  build-and-pack.ps1   # 打包安装脚本：pnpm pack → 放进 profile → 改写 dependencies
+  .gitignore           # 打包产物（*.tgz）不入库
   lib/
-    index.js         # 宿主半侧：HTTP 服务、模型目录、OpenAI 兼容层、Config schema
-    client.js        # 浏览器半侧：Plugins 页上的配置表单
+    index.js           # 宿主半侧：HTTP 服务、模型目录、OpenAI 兼容层、Config schema
+    client.js          # 浏览器半侧：Plugins 页上的配置表单
 ```
 
 宿主半侧依赖 `@deepseek-ai/schemastery`（由 DSH 运行时提供）；浏览器半侧通过 DSH 的客户端模块表使用
