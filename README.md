@@ -24,40 +24,35 @@ Python、Node、curl、Notebook 都能直接用，不需要额外的 SDK 适配�
 
 ### 安装
 
-把本包放进 profile 的 `node_modules`，并登记进 bundle 清单：
+**本插件必须作为 profile 依赖安装**：`dependencies` 交给 pnpm 解析，`dsh.profile.bundles` 交给 loader 组合，两处都要登记。
 
-1. 将 `dsh-llm-gateway/` 整个目录放到 `<profile>/node_modules/dsh-llm-gateway/`
-2. 在 profile 的 `package.json` 里，把 `"dsh-llm-gateway"` 追加进 `dsh.profile.bundles`
-3. 重启 DSH（bundle 清单变更必须重启；`patchReload: live` 只管已加载插件的 config）
+只把目录丢进 `<profile>/node_modules/`、不写 `dependencies` 的「游离安装」不受支持，后果是：
 
-也可以让 pnpm 把它装上。两种挂法各有取舍：
+- DSH 插件页看不到它 —— 那里的 `installed` 由 profile 的 `dependencies` 决定，启停、版本、卸载都无从操作；
+- 「设置 → 插件」里不会出现它的配置表单，端口 / 默认模型这些参数只能改配置文件；
+- `/healthz` 会返回 `installation.declared: false`，宿主日志同时打一条「游离安装」警告。
 
-**符号链接**（`link:`）——源码就是插件本体，改完源码重装一次即可：
+**建议安装方式：打包安装**（tarball）—— profile 与源码目录解耦，内容被复制进 profile，
+Node 的依赖解析基准留在 profile 的 `node_modules` 内，不依赖符号链接。
 
-```jsonc
-// profile 的 package.json
-{
-  "dependencies": {
-    "dsh-llm-gateway": "link:/abs/path/to/dsh-llm-gateway"
-  }
-}
-```
+1. bump `package.json` 的 `version`，然后打包并登记：
 
-**复制安装**（`file:`）——内容被复制进 profile，源码留在原处：
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\build-and-pack.ps1
+   ```
 
-```jsonc
-{
-  "dependencies": {
-    "dsh-llm-gateway": "file:/abs/path/to/dsh-llm-gateway"
-  }
-}
-```
+   脚本做三件事：`pnpm pack` 出 `<name>-<version>.tgz`、把它复制进 profile、
+   把 profile 的 `dependencies.dsh-llm-gateway` 改写成 `file:<name>-<version>.tgz`。
 
-两种都要跑一次 `pnpm install`。
+2. 在 profile 目录里安装：
 
-> **改动插件代码后必须重启 DSH。** 重装只换磁盘上的文件，跑着的进程不会把已载入的模块换掉 ——
-> 判断要不要重启，看进程启动时间是不是早于文件落盘时间。另外 Windows 上重装前最好先卸载，
-> 否则 pnpm 会撞上 `EPERM`（旧目录还被进程占着，改不了名）。
+   ```powershell
+   pnpm install
+   ```
+
+3. **重启 DSH** —— bundle 清单变更必须重启（`patchReload: live` 只管已加载插件的 config）。
+   改动插件代码后同样要重启：重装只换磁盘上的文件，跑着的进程不会把已载入的模块换掉；
+   Windows 上重装前最好先卸载，否则 pnpm 会撞 `EPERM`（旧目录还被进程占着，改不了名）。
 
 > 别在 profile 的 `cordis.patch.yml` 里再写一条 `id: llm-gateway` 的 `insert` —— 会和包内 patch 撞 id。
 > 要改默认值就写一条 id 定向的 override，只列要改的字段。

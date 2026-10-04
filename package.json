@@ -1,11 +1,16 @@
 {
   "name": "dsh-llm-gateway",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "main": "./lib/index.js",
   "description": "把 DSH 已配置的全部 provider/model 以 OpenAI 兼容接口暴露到本机回环，供任意本地程序调用",
   "license": "MIT",
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md"
+  ],
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
